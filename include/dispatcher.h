@@ -23,7 +23,8 @@ typedef enum {
     SYS_EVT_SAMPLES_PARSED,    /**< Data parsed by Input Manager */
     SYS_EVT_FEATURES_READY,    /**< DSP features extracted by Signal Proc */
     SYS_EVT_INTENT_STATE,      /**< Intent evaluation from Safety Manager */
-    SYS_EVT_CMD_BRAKE          /**< Hardware actuation command to Output */
+    SYS_EVT_CMD_BRAKE,          /**< Hardware actuation command to Output */
+    SYS_EVT_MAX
 } SysEventType;
 
 /* ── Event Payload Envelope ─────────────────────────────────────────── */
