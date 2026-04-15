@@ -18,6 +18,55 @@ static DispatchEvent evt_queue[DISPATCHER_QUEUE_SIZE];
 static int head;
 static int tail;
 
+/* ── Event Handler Type ─────────────────────────────────────────────── */
+
+typedef void (*EventHandler)(const DispatchEvent *ev);
+
+/* ── Event Handlers ─────────────────────────────────────────────────── */
+
+static void handle_tick_1ms(const DispatchEvent *ev)
+{
+    (void)ev;  // unused
+    input_poll();
+    output_flush_logs();
+}
+
+static void handle_samples_parsed(const DispatchEvent *ev)
+{
+    signal_proc_handle_event(&ev->payload.frame);
+}
+
+static void handle_features_ready(const DispatchEvent *ev)
+{
+    safety_handle_event(&ev->payload.features);
+}
+
+static void handle_intent_state(const DispatchEvent *ev)
+{
+    supervisor_post_event(ev->payload.intent);
+}
+
+static void handle_cmd_brake(const DispatchEvent *ev)
+{
+    output_set_brake_request(ev->payload.brake_cmd);
+}
+
+static void handle_unknown(const DispatchEvent *ev)
+{
+    (void)ev;
+    hal_log("[WARN] Dispatcher received unknown event type");
+}
+
+/* ── Dispatch Table ─────────────────────────────────────────────────── */
+
+static EventHandler dispatch_table[SYS_EVT_MAX] = {
+    [SYS_EVT_TICK_1MS]        = handle_tick_1ms,
+    [SYS_EVT_SAMPLES_PARSED]  = handle_samples_parsed,
+    [SYS_EVT_FEATURES_READY]  = handle_features_ready,
+    [SYS_EVT_INTENT_STATE]    = handle_intent_state,
+    [SYS_EVT_CMD_BRAKE]       = handle_cmd_brake
+};
+
 /* ── Public Interface ───────────────────────────────────────────────── */
 
 void dispatcher_init(void)
@@ -30,61 +79,36 @@ void dispatcher_init(void)
 void dispatcher_post(const DispatchEvent *ev)
 {
     int next_head = (head + 1) % DISPATCHER_QUEUE_SIZE;
-    
+
     if (next_head == tail) {
-        /* Queue overflow: drop the event to prevent memory corruption */
+        /* Queue overflow: drop the event */
         hal_log("[ERR] Dispatcher queue overflow! Event dropped.");
         return;
     }
 
-    /* Copy the event payload into the ring buffer */
     evt_queue[head] = *ev;
     head = next_head;
 }
 
 void dispatcher_run_once(void)
 {
-    /* Process all events currently sitting in the queue.
-     * Note: If a handler posts a new event, it will be added to the head
-     * and processed sequentially within this same loop. */
     while (head != tail) {
-        
-        /* 1. Pop the oldest event */
+
+        /* 1. Pop oldest event */
         DispatchEvent ev = evt_queue[tail];
         tail = (tail + 1) % DISPATCHER_QUEUE_SIZE;
 
-        /* 2. Route the event to the correct module handler */
-        switch (ev.type) {
-            
-            case SYS_EVT_TICK_1MS:
-                /* The 1ms heartbeat triggers hardware polling and log flushes */
-                input_poll();
-                output_flush_logs();
-                break;
+        /* 2. O(1) dispatch */
+        if (ev.type < SYS_EVT_MAX) {
+            EventHandler handler = dispatch_table[ev.type];
 
-            case SYS_EVT_SAMPLES_PARSED:
-                /* Send raw sample frames to the DSP feature engine */
-                signal_proc_handle_event(&ev.payload.frame);
-                break;
-
-            case SYS_EVT_FEATURES_READY:
-                /* Send extracted RMS/features to the intent threshold logic */
-                safety_handle_event(&ev.payload.features);
-                break;
-
-            case SYS_EVT_INTENT_STATE:
-                /* Send UML state transition requests to the Supervisor */
-                supervisor_post_event(ev.payload.intent);
-                break;
-
-            case SYS_EVT_CMD_BRAKE:
-                /* Send hardware actuation commands to the Output manager */
-                output_set_brake_request(ev.payload.brake_cmd);
-                break;
-
-            default:
-                hal_log("[WARN] Dispatcher received unknown event type");
-                break;
+            if (handler) {
+                handler(&ev);
+            } else {
+                handle_unknown(&ev);
+            }
+        } else {
+            handle_unknown(&ev);
         }
     }
 }
